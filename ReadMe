@@ -1,0 +1,98 @@
+Team Members : Mark Fielbig, Farhan Ali
+
+TCP mechanisms implemented : 
+	Reliable data transfer using the SEQ and ACK number of datagram packtes
+	Flow control via receiver window advertisement
+	Congestion control with slow start,congestion avoidance and fast recovery
+
+1. Binding to only unicast addresses:
+
+We first obtained the unicast address of the machine using the Get_ifi_info_plus function
+and create a sorted list of struct ip_info.The list is sorted based on its network mask
+length. This is a struct that we define in our common.h file.
+struct ip_info{
+  struct in_addr ip;
+  struct in_addr netmask;
+  struct in_addr subnet;
+  int netmask_len;
+  struct ip_info *next;
+  char ip_str[INET_ADDRSTRLEN];
+}
+
+Then in the server side the server just goes through the list of IP address in the list
+of ip_info struct and bind different sockets to it.
+Also on the server we have a list of struct that holds the information of which socket
+number bound to the ip address.This struct is defined in the server.h 
+typedef struct listen_interface {
+  int fd;
+  struct ip_info *info;
+} listen_interface;
+
+On the client side we try to identify the if the server IP address is on the same network by going through the list of ip_info list. 
+
+
+2. Reliable data transfer we use the mechanism of acking for every sequence the client 
+receives. We created our own datagram struct which contains a field for sequence number,
+acknowledgement number. For every sequence the client appropriately send the ack number
+it expects from the server. The datagram struct is defined in the datagram.h file.
+
+typedef struct datagram_header {
+  int seq_number;
+  int ack_number;
+  int win_size;
+  int length;
+} datagram_header
+
+typedef struct datagram {
+  datagram_header header;
+  char message[DATAGRAM_MESSAGE_SIZE];
+} datagram 
+
+
+3. Flow control is implemented using the ARQ sliding window mechanism. So both the client
+and the server maintains circular buffers.For every seq of datagram received the client 
+send the appropriate ack with the available window size. In the server side, the number of
+datagrams to send is calculated by getting the minimum of server's buffer capacity, the 
+advertised client window size and current server window size and minus the number of 
+datagram in flight. The server window size is determined by the mechanisms for congestion control. 
+
+In the client side we have implemented a main thread and consumer thread. The main
+thread inserts the datagram into the buffer and then sends an ack of the next sequence it
+expects in order.As mentioned in class the consumer thread wakes up after a certain period of time and empties the buffer of all the datagrams in order.
+
+
+4. RTT calculation is done with integers instead of floating point numbers to increase
+efficiency. The calculation can be seen in rto_update function of rto.h. The srtt value
+is inflated by 8 and the rttvar value is inflated by 4. To calculate the uninflated rto
+value the following equation is used:
+  rto = (srtt8 >> 3) + rttvar4;
+Which uninflates srtt8 back to srtt and doesn't touch rttvar4 since there is a 
+coefficient of 4 in the equation. The rto is capped on the interval of [1000ms, 3000ms]
+as seen in the get_rto function. Whenever the rto is printed both the capped and
+uncapped rto are shown.
+
+When a timeout occurs the uncapped rto is doubled and continues to double until an ack
+is received, which then removes this doubling effect. This uncapped rto is still however
+capped on the interval of [1000ms, 3000ms] before being assigned to the timeout timer.
+
+5. Congestion control is implemented by using a cwnd and sstrhesh variable. There are
+two different phases for congestion control:
+  1. Slow start - occurs when cwnd <= ssthresh and results in an increase of cwnd by 1
+  each time an ack is received.
+  2. Congestion avoidance - occurs when cwnd > sstrhesh and results in an increase of
+  cwnd by 1 each time an entire send window of size cwnd is acked.
+There are two events that will decrease the cwnd variable:
+  1. Timeout - ssthresh is set to cwnd / 2, and cwnd is set to 1. This returns the
+  sender back to slow start
+  2. 3 duplicate acks - ssthres is set to cwnd / 2 and cwnd is set to cwnd / 2. This
+  returns the sender to congestion avoidance
+Note that the integer division above is rounded up to avoid getting a cwnd of 1 / 2 = 0
+
+The amount of maximum in flight segments at any given time is given by: 
+  min(cwnd, send_window_size, advertised_client_window_size)
+
+6. We identify the last datagram when the server sends and ack of -1. The consumer thread
+in client after reading the last datagram set's a global variable shut_dwn to 1 and exits.
+In the main thread of the client checks for this variable and if it's set to 1 we exit
+the client cleanly. So the client does not close until it has read and written the last 
+datagram to the file.

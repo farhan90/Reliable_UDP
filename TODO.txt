@@ -1,0 +1,12 @@
+Function to read client config file
+Function to read server config file
+Interfaces in list
+
+Client
+  Figure out which interface to connect to
+    Same node MSG_DONTROUTE
+    Same network MSG_DONTROUTE
+    Different network  
+Server
+  Get all interfaces, bind to each
+    Time out on both sockets
